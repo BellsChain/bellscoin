@@ -120,6 +120,17 @@ public:
   }
 
   /**
+   * Whether the parent coinbase contains witness data.  The AuxPoW merkle
+   * proof commits to the coinbase txid, which deliberately excludes witness
+   * data, so this part of the serialized AuxPoW is malleable.
+   */
+  inline bool
+  hasParentBlockCoinbaseWitness () const
+  {
+    return coinbaseTx && coinbaseTx->HasWitness ();
+  }
+
+  /**
    * Calculate the expected index in the merkle tree.  This is also used
    * for the test-suite.
    * @param nNonce The coinbase's nonce value.

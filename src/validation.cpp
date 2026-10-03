@@ -4421,7 +4421,19 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     // the block hash, so we couldn't mark the block as permanently
     // failed).
     if (GetBlockWeight(block) > MAX_BLOCK_WEIGHT) {
-        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-weight", strprintf("%s : weight limit failed", __func__));
+        // The AuxPoW proof commits to the parent coinbase txid, which does not
+        // include its witness.  A peer can therefore add parent-coinbase
+        // witness without changing either the Bells block hash or the AuxPoW
+        // proof.  Treat an overweight serialization containing such data as
+        // mutated so it cannot permanently invalidate the shared block hash.
+        //
+        // Do not reject parent-coinbase witness by itself: it is present in
+        // historical blocks and is valid under the existing consensus rules.
+        const BlockValidationResult result =
+            block.auxpow && block.auxpow->hasParentBlockCoinbaseWitness()
+                ? BlockValidationResult::BLOCK_MUTATED
+                : BlockValidationResult::BLOCK_CONSENSUS;
+        return state.Invalid(result, "bad-blk-weight", strprintf("%s : weight limit failed", __func__));
     }
 
     return true;

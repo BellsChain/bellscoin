@@ -15,6 +15,7 @@ from test_framework.blocktools import (
 )
 from test_framework.messages import (
   CAuxPow,
+  CTxInWitness,
   uint256_from_compact,
 )
 from test_framework.p2p import P2PDataStore
@@ -24,6 +25,7 @@ from test_framework.util import (
 
 from test_framework.auxpow_testing import computeAuxpow
 
+import copy
 from io import BytesIO
 
 class AuxpowInvalidPoWTest (BellscoinTestFramework):
@@ -62,6 +64,43 @@ class AuxpowInvalidPoWTest (BellscoinTestFramework):
     assert_equal (node.submitblock (blk.serialize ().hex ()), None)
     assert_equal (node.getbestblockhash (), blkHash)
 
+    self.log.info ("Submitting a valid auxpow block with standard parent witness...")
+    blk, blkHash = self.createBlock ()
+    blk = self.addAuxpow (blk, blkHash, True)
+    witnessed = self.addParentWitness (blk, 32)
+    assert_equal (node.submitblock (witnessed.serialize ().hex ()), None)
+    assert_equal (node.getbestblockhash (), blkHash)
+
+    self.log.info ("Sending an overweight mutation over P2P...")
+    tip = node.getbestblockhash ()
+    blk, blkHash = self.createBlock ()
+    blk = self.addAuxpow (blk, blkHash, True)
+    mutated = self.addParentWitness (blk, 3_999_000)
+    node.p2ps[0].send_blocks_and_test ([mutated], node, force_send=True,
+                                   success=False, reject_reason="bad-blk-weight")
+    assert_equal (node.getbestblockhash (), tip)
+
+    self.log.info ("Sending the compact form after the P2P mutation...")
+    node.p2ps[0].send_blocks_and_test ([blk], node, success=True)
+    assert_equal (node.getbestblockhash (), blkHash)
+
+    self.log.info ("Submitting an overweight mutation of a valid auxpow block...")
+    tip = node.getbestblockhash ()
+    blk, blkHash = self.createBlock ()
+    blk = self.addAuxpow (blk, blkHash, True)
+    mutated = self.addParentWitness (blk, 3_999_000)
+    assert_equal (node.submitblock (mutated.serialize ().hex ()), "bad-blk-weight")
+    assert_equal (node.getbestblockhash (), tip)
+
+    self.log.info ("Restarting before submitting the compact form...")
+    self.restart_node (0)
+    node = self.nodes[0]
+    assert_equal (node.getbestblockhash (), tip)
+
+    self.log.info ("Submitting the compact form after the mutation and restart...")
+    assert_equal (node.submitblock (blk.serialize ().hex ()), None)
+    assert_equal (node.getbestblockhash (), blkHash)
+
   def createBlock (self):
     """
     Creates a new block that is valid for the current tip.  It is marked as
@@ -95,6 +134,19 @@ class AuxpowInvalidPoWTest (BellscoinTestFramework):
     block.auxpow.deserialize (BytesIO (bytes.fromhex(auxpowHex)))
 
     return block
+
+
+  def addParentWitness (self, block, size):
+    """Adds uncommitted witness to the AuxPoW parent coinbase."""
+
+    witnessed = copy.deepcopy (block)
+    witnessed.auxpow.coinbase_tx.wit.vtxinwit = [CTxInWitness ()]
+    witnessed.auxpow.coinbase_tx.wit.vtxinwit[0].scriptWitness.stack = [b'\x00' * size]
+    witnessed.rehash ()
+    assert_equal (witnessed.hash, block.hash)
+    assert_equal (witnessed.auxpow.coinbase_tx.calc_sha256 (),
+                  block.auxpow.coinbase_tx.calc_sha256 ())
+    return witnessed
 
 if __name__ == '__main__':
   AuxpowInvalidPoWTest(__file__).main()
