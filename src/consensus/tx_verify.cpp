@@ -111,21 +111,21 @@ bool SequenceLocks(const CTransaction &tx, int flags, std::vector<int>& prevHeig
     return EvaluateSequenceLocks(block, CalculateSequenceLocks(tx, flags, prevHeights, block));
 }
 
-unsigned int GetLegacySigOpCount(const CTransaction& tx)
+unsigned int GetLegacySigOpCount(const CTransaction& tx, bool count_csfs)
 {
     unsigned int nSigOps = 0;
     for (const auto& txin : tx.vin)
     {
-        nSigOps += txin.scriptSig.GetSigOpCount(false);
+        nSigOps += txin.scriptSig.GetSigOpCount(false, count_csfs);
     }
     for (const auto& txout : tx.vout)
     {
-        nSigOps += txout.scriptPubKey.GetSigOpCount(false);
+        nSigOps += txout.scriptPubKey.GetSigOpCount(false, count_csfs);
     }
     return nSigOps;
 }
 
-unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& inputs)
+unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& inputs, bool count_csfs)
 {
     if (tx.IsCoinBase())
         return 0;
@@ -137,20 +137,21 @@ unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& in
         assert(!coin.IsSpent());
         const CTxOut &prevout = coin.out;
         if (prevout.scriptPubKey.IsPayToScriptHash())
-            nSigOps += prevout.scriptPubKey.GetSigOpCount(tx.vin[i].scriptSig);
+            nSigOps += prevout.scriptPubKey.GetSigOpCount(tx.vin[i].scriptSig, count_csfs);
     }
     return nSigOps;
 }
 
 int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, uint32_t flags)
 {
-    int64_t nSigOps = GetLegacySigOpCount(tx) * WITNESS_SCALE_FACTOR;
+    const bool count_csfs = (flags & SCRIPT_VERIFY_CHECKSIGFROMSTACK) != 0;
+    int64_t nSigOps = GetLegacySigOpCount(tx, count_csfs) * WITNESS_SCALE_FACTOR;
 
     if (tx.IsCoinBase())
         return nSigOps;
 
     if (flags & SCRIPT_VERIFY_P2SH) {
-        nSigOps += GetP2SHSigOpCount(tx, inputs) * WITNESS_SCALE_FACTOR;
+        nSigOps += GetP2SHSigOpCount(tx, inputs, count_csfs) * WITNESS_SCALE_FACTOR;
     }
 
     for (unsigned int i = 0; i < tx.vin.size(); i++)

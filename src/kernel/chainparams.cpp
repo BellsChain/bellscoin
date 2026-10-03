@@ -112,6 +112,7 @@ public:
     CMainParams() {
         m_chain_type = ChainType::MAIN;
         consensus.signet_blocks = false;
+        consensus.enforce_opcat_header_format = true;
         consensus.signet_challenge.clear();
         // Not used in Bells, but left here for completeness.
         consensus.nSubsidyHalvingInterval = 100000;
@@ -154,9 +155,10 @@ public:
 
         // Deployment of OP_CAT, OP_CHECKTEMPLATEVERIFY, OP_INTERNALKEY, OP_CHECKSIGFROMSTACK
         consensus.vDeployments[Consensus::DEPLOYMENT_OP_CAT].bit = 2;
-        consensus.vDeployments[Consensus::DEPLOYMENT_OP_CAT].nStartTime = 1766620800; // 2025-12-25 00:00:00
-        consensus.vDeployments[Consensus::DEPLOYMENT_OP_CAT].nTimeout = 1798156800; // 2026-12-25 00:00:00
-        consensus.vDeployments[Consensus::DEPLOYMENT_OP_CAT].min_activation_height = 871000;
+        // Retain bit 2 and count signaling under the corrected deployment schedule.
+        consensus.vDeployments[Consensus::DEPLOYMENT_OP_CAT].nStartTime = 1790812800; // 2026-10-01 00:00:00 UTC
+        consensus.vDeployments[Consensus::DEPLOYMENT_OP_CAT].nTimeout = 1806537600; // 2027-04-01 00:00:00 UTC
+        consensus.vDeployments[Consensus::DEPLOYMENT_OP_CAT].min_activation_height = 1300320; // 129 * 10,080; a period boundary
 
 
         consensus.nMinimumChainWork = uint256S("0x000000000000000000000000000000000000000000000fba441d3034461e8eb4");
@@ -550,6 +552,11 @@ public:
         consensus.nLegacyBlocksBefore = consensus.BIP34Height;
 
         for (const auto& [deployment_pos, version_bits_params] : opts.version_bits_parameters) {
+            // Preserve the default regtest deployment and its existing fixtures.
+            // Explicit OP_CAT deployment tests exercise the rescheduled mainnet rules.
+            if (deployment_pos == Consensus::DEPLOYMENT_OP_CAT) {
+                consensus.enforce_opcat_header_format = true;
+            }
             consensus.vDeployments[deployment_pos].nStartTime = version_bits_params.start_time;
             consensus.vDeployments[deployment_pos].nTimeout = version_bits_params.timeout;
             consensus.vDeployments[deployment_pos].min_activation_height = version_bits_params.min_activation_height;

@@ -9,7 +9,7 @@ Bells Core [BEL]
 
 </div>
 
-## This branch contains the latest version 3.1.0 of the Bellscoin node software.
+## This branch contains Bells Core 3.1.1rc2 (release candidate 2).
 
 ## What is Bells?
 Bells is a joke cryptocurrency referencing the "Bells" currency in Animal Crossing. Created by Billy Markus in 2013 right before Dogecoin and revived in 2023, it's Dogecoin's older brother. The shared "Nintondo" mention - a playful nod to Nintendo - in both genesis blocks underscores their sibling connection. 

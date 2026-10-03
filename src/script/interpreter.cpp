@@ -2275,7 +2275,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
     return set_success(serror);
 }
 
-size_t static WitnessSigOps(int witversion, const std::vector<unsigned char>& witprogram, const CScriptWitness& witness)
+size_t static WitnessSigOps(int witversion, const std::vector<unsigned char>& witprogram, const CScriptWitness& witness, unsigned int flags)
 {
     if (witversion == 0) {
         if (witprogram.size() == WITNESS_V0_KEYHASH_SIZE)
@@ -2283,7 +2283,7 @@ size_t static WitnessSigOps(int witversion, const std::vector<unsigned char>& wi
 
         if (witprogram.size() == WITNESS_V0_SCRIPTHASH_SIZE && witness.stack.size() > 0) {
             CScript subscript(witness.stack.back().begin(), witness.stack.back().end());
-            return subscript.GetSigOpCount(true);
+            return subscript.GetSigOpCount(true, (flags & SCRIPT_VERIFY_CHECKSIGFROMSTACK) != 0);
         }
     }
 
@@ -2303,7 +2303,7 @@ size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey,
     int witnessversion;
     std::vector<unsigned char> witnessprogram;
     if (scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram)) {
-        return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty);
+        return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty, flags);
     }
 
     if (scriptPubKey.IsPayToScriptHash() && scriptSig.IsPushOnly()) {
@@ -2315,7 +2315,7 @@ size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey,
         }
         CScript subscript(data.begin(), data.end());
         if (subscript.IsWitnessProgram(witnessversion, witnessprogram)) {
-            return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty);
+            return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty, flags);
         }
     }
 

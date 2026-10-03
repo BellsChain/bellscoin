@@ -228,4 +228,53 @@ BOOST_AUTO_TEST_CASE(GetTxSigOpCost)
     }
 }
 
+BOOST_AUTO_TEST_CASE(csfs_sigops_follow_activation)
+{
+    const uint32_t before = SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS;
+    const uint32_t after = before | SCRIPT_VERIFY_CHECKSIGFROMSTACK;
+    // Even unexecuted NOP5s must keep their historical cost before activation.
+    const CScript script = CScript() << OP_0 << OP_IF << OP_NOP5 << OP_ENDIF << OP_TRUE;
+    BOOST_CHECK_EQUAL(script.GetSigOpCount(false), 0U);
+    BOOST_CHECK_EQUAL(script.GetSigOpCount(true, true), 1U);
+
+    CCoinsView dummy;
+    CCoinsViewCache coins(&dummy);
+    CMutableTransaction funding, spending;
+
+    BuildTxs(spending, coins, funding, script, CScript(), CScriptWitness());
+    BOOST_CHECK_EQUAL(GetLegacySigOpCount(CTransaction(funding)), 0U);
+    BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(funding), coins, before), 0);
+    BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(funding), coins, after), 4);
+
+    const CScript p2sh = GetScriptForDestination(ScriptHash(script));
+    BuildTxs(spending, coins, funding, p2sh, CScript() << ToByteVector(script), CScriptWitness());
+    BOOST_CHECK_EQUAL(GetP2SHSigOpCount(CTransaction(spending), coins), 0U);
+    BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(spending), coins, before), 0);
+    BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(spending), coins, after), 4);
+    BOOST_CHECK_EQUAL(VerifyWithFlag(CTransaction(funding), spending, before), SCRIPT_ERR_OK);
+    BOOST_CHECK_EQUAL(VerifyWithFlag(CTransaction(funding), spending, after), SCRIPT_ERR_OK);
+
+    const CScript p2wsh = GetScriptForDestination(WitnessV0ScriptHash(script));
+    CScriptWitness witness;
+    witness.stack.emplace_back(script.begin(), script.end());
+    BuildTxs(spending, coins, funding, p2wsh, CScript(), witness);
+    BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(spending), coins, before), 0);
+    BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(spending), coins, after), 1);
+    BOOST_CHECK_EQUAL(VerifyWithFlag(CTransaction(funding), spending, before), SCRIPT_ERR_OK);
+    BOOST_CHECK_EQUAL(VerifyWithFlag(CTransaction(funding), spending, after), SCRIPT_ERR_OK);
+
+    const CScript nested = GetScriptForDestination(ScriptHash(p2wsh));
+    BuildTxs(spending, coins, funding, nested, CScript() << ToByteVector(p2wsh), witness);
+    BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(spending), coins, before), 0);
+    BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(spending), coins, after), 1);
+
+    // Regression: a zero-value, unspendable output could split main and dev
+    // without executing any new opcode or reaching a BIP9 activation boundary.
+    CScript oversized = CScript() << OP_RETURN;
+    for (unsigned i = 0; i <= MAX_BLOCK_SIGOPS_COST / WITNESS_SCALE_FACTOR; ++i) oversized << OP_NOP5;
+    BuildTxs(spending, coins, funding, oversized, CScript(), CScriptWitness());
+    BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(funding), coins, before), 0);
+    BOOST_CHECK_EQUAL(GetTransactionSigOpCost(CTransaction(funding), coins, after), MAX_BLOCK_SIGOPS_COST + WITNESS_SCALE_FACTOR);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

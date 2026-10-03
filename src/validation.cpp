@@ -62,6 +62,7 @@
 #include <util/trace.h>
 #include <util/translation.h>
 #include <validationinterface.h>
+#include <versionbits.h>
 #include <node/warnings.h>
 #include <wallet/wallet.h>
 
@@ -2682,45 +2683,26 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // See BIP30, CVE-2012-1909, and http://r6.ca/blog/20120206T005236Z.html for more information.
     bool fEnforceBIP30 = !IsBIP30Repeat(*pindex);
 
-    // Once BIP34 activated it was not possible to create new duplicate coinbases and thus other than starting
-    // with the 2 existing duplicate coinbase pairs, not possible to create overwriting txs.  But by the
-    // time BIP34 activated, in each of the existing pairs the duplicate coinbase had overwritten the first
-    // before the first had been spent.  Since those coinbases are sufficiently buried it's no longer possible to create further
-    // duplicate transactions descending from the known pairs either.
-    // If we're on the known chain at height greater than where BIP34 activated, we can save the db accesses needed for the BIP30 check.
-
-    // BIP34 requires that a block at height X (block X) has its coinbase
-    // scriptSig start with a CScriptNum of X (indicated height X).  The above
-    // logic of no longer requiring BIP30 once BIP34 activates is flawed in the
-    // case that there is a block X before the BIP34 height of 40,240 which has
-    // an indicated height Y where Y is greater than X.  The coinbase for block
-    // X would also be a valid coinbase for block Y, which could be a BIP30
-    // violation.  An exhaustive search of all mainnet coinbases before the
-    // BIP34 height which have an indicated height greater than the block height
-    // reveals many occurrences. The lowest indicated height found is
-    // 1,701,897,592 and thus coinbases for blocks at this
-    // height would be the first opportunity for BIP30 to be violated.
-
-    // The search reveals a great many blocks which have an indicated height
-    // greater than 1,701,897,592, so we simply remove the optimization to skip
-    // BIP30 checking for blocks at height 1,701,897,592 or higher.  Before we reach
-    // that block in another 3,248 years or so, we should take advantage of a
-    // future consensus change to do a new and improved version of BIP34 that
-    // will actually prevent ever creating any duplicate coinbases in the
-    // future.
+    // BIP34 makes post-activation coinbases unique, but an earlier coinbase
+    // could already start with the canonical encoding of a future height.
+    // Only skip BIP30 on a history anchored by the known BIP34 block, and only
+    // until the earliest such prefix in that history can be reused.
+    //
+    // Bells mainnet blocks 1..40,239 contain no duplicate coinbase txids. The
+    // earliest canonical future-height prefix is 04 78 e5 70 65 in block 1
+    // (75fc86c3debe0540d3ff064b8eb51abf845b6d3f9cfaecbdc822fa4807de28b3),
+    // encoding 1,701,897,592. Genesis is excluded because its outputs never
+    // enter the UTXO set. Bitcoin's 1,983,702 cutoff describes Bitcoin history,
+    // not Bells history.
     static constexpr int BIP34_IMPLIES_BIP30_LIMIT = 1701897592;
 
-    // testnet has no blocks before the BIP34 height with indicated heights
-    // post BIP34. After block 1,701,897,592 testnet starts doing unnecessary
-    // BIP30 checking again.
     assert(pindex->pprev);
     CBlockIndex* pindexBIP34height = pindex->pprev->GetAncestor(params.GetConsensus().BIP34Height);
     //Only continue to enforce if we're below BIP34 activation height or the block hash at that height doesn't correspond.
     fEnforceBIP30 = fEnforceBIP30 && (!pindexBIP34height || !(pindexBIP34height->GetBlockHash() == params.GetConsensus().BIP34Hash));
 
-    // TODO: Remove BIP30 checking from block height 1,701,897,592 on, once we have a
-    // consensus change that ensures coinbases at those heights cannot
-    // duplicate earlier coinbases.
+    // Resume explicit overwrite checks when the historical uniqueness proof
+    // no longer suffices; also check all histories without the BIP34 anchor.
     if (fEnforceBIP30 || pindex->nHeight >= BIP34_IMPLIES_BIP30_LIMIT) {
         for (const auto& tx : block.vtx) {
             for (size_t o = 0; o < tx->vout.size(); o++) {
@@ -4356,43 +4338,27 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
               DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_DERSIG),
               DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_CLTV));
 
-    if (!consensusParams.AllowLegacyBlocks(nHeight) && block.IsLegacy()) {
+    // Preserve main-branch header rules before the coordinated deployment.
+    // These checks must also be applied when the deployment is disabled.
+    const int32_t nChainID = block.GetChainId();
+    if (nHeight > consensusParams.nAuxpowStartHeight &&
+        (!CPureBlockHeader::IsValidBaseVersion(baseVer) ||
+         (nChainID > 0 && nChainID != consensusParams.nAuxpowChainId))) {
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER,
-                             "bad-version-legacy",
-                             strprintf("rejected legacy nVersion=0x%08x block", block.nVersion));
+                             strprintf("bad-version(0x%08x)", baseVer),
+                             strprintf("rejected nVersion=0x%08x block", block.nVersion));
     }
 
-    const bool enforce_version_rules = !consensusParams.AllowLegacyBlocks(nHeight);
-
-    if (enforce_version_rules) {
-        if ((baseVer < 2 && DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_HEIGHTINCB)) ||
-            (baseVer < 3 && DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_DERSIG)) ||
-            (baseVer < 4 && DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_CLTV))) {
-            return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER,
-                                 strprintf("bad-version(0x%08x)", baseVer),
-                                 strprintf("rejected nVersion=0x%08x block", block.nVersion));
-        }
-
-        if (nHeight >= consensusParams.nAuxpowStartHeight) {
-            if (!CPureBlockHeader::IsValidBaseVersion(baseVer)) {
-                return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER,
-                                     strprintf("bad-version(0x%08x)", baseVer),
-                                     strprintf("rejected nVersion=0x%08x block", block.nVersion));
-            }
-
-            const int32_t nChainID = block.GetChainId();
-            if (block.IsAuxpow()) {
-                if (nChainID != consensusParams.nAuxpowChainId) {
-                    return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER,
-                                         "bad-auxpow-chainid",
-                                         strprintf("rejected nVersion=0x%08x block", block.nVersion));
-                }
-            } else if (nChainID != 0) {
-                return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER,
-                                     "bad-nonauxpow-chainid",
-                                     strprintf("rejected nVersion=0x%08x block", block.nVersion));
-            }
-        }
+    // On mainnet, include the explicit header format in the rescheduled opcode
+    // deployment. Preserve existing test networks' historical activation rules.
+    // Before ACTIVE, base-zero AuxPoW headers remain valid. After ACTIVE only
+    // the versionbits marker is required, not the deployment's signaling bit.
+    if (consensusParams.enforce_opcat_header_format &&
+        DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_OP_CAT) &&
+        (block.nVersion & VERSIONBITS_TOP_MASK) != VERSIONBITS_TOP_BITS) {
+        return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER,
+                             "bad-versionbits-format",
+                             strprintf("missing versionbits header marker in nVersion=0x%08x", block.nVersion));
     }
 
     return true;

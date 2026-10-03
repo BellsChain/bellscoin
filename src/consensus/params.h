@@ -81,6 +81,9 @@ static const unsigned int POW_TARGET_SPACING = 60;
 
 struct Params {
     uint256 hashGenesisBlock;
+    /** Require the versionbits header marker after OP_CAT activation on this network.
+     * Disabled on existing test networks to preserve their prior activation rules. */
+    bool enforce_opcat_header_format{false};
     int nSubsidyHalvingInterval;
     /**
      * Hashes of blocks that

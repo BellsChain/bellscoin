@@ -533,13 +533,14 @@ public:
      * counted more accurately, assuming they are of the form
      *  ... OP_N CHECKMULTISIG ...
      */
-    unsigned int GetSigOpCount(bool fAccurate) const;
+    // count_csfs must only be enabled when CHECKSIGFROMSTACK is enforced.
+    unsigned int GetSigOpCount(bool fAccurate, bool count_csfs = false) const;
 
     /**
      * Accurately count sigOps, including sigOps in
      * pay-to-script-hash transactions:
      */
-    unsigned int GetSigOpCount(const CScript& scriptSig) const;
+    unsigned int GetSigOpCount(const CScript& scriptSig, bool count_csfs = false) const;
 
     /*
      * OP_1 <0x4e73>

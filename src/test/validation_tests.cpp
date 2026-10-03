@@ -11,6 +11,7 @@
 #include <signet.h>
 #include <uint256.h>
 #include <util/chaintype.h>
+#include <versionbits.h>
 #include <validation.h>
 
 #include <string>
@@ -20,6 +21,51 @@
 #include <boost/test/unit_test.hpp>
 
 BOOST_FIXTURE_TEST_SUITE(validation_tests, TestingSetup)
+
+BOOST_AUTO_TEST_CASE(mainnet_opcode_recovery_activation_schedule)
+{
+    const auto params = CreateChainParams(*m_node.args, ChainType::MAIN);
+    const auto& consensus = params->GetConsensus();
+    const auto& deployment = consensus.vDeployments[Consensus::DEPLOYMENT_OP_CAT];
+    BOOST_REQUIRE(deployment.nStartTime > 0);
+    BOOST_REQUIRE(deployment.nTimeout > deployment.nStartTime);
+    const int period = consensus.nMinerConfirmationWindow;
+    BOOST_REQUIRE_EQUAL(deployment.min_activation_height % period, 0);
+    BOOST_REQUIRE(deployment.min_activation_height > 4 * period);
+
+    // Supply four periods ending immediately before the configured activation
+    // floor. The preceding boundary predates the start and terminates the
+    // versionbits history walk; no earlier blocks can contribute votes.
+    CBlockIndex anchor;
+    anchor.nHeight = deployment.min_activation_height - 4 * period - 1;
+    anchor.nTime = deployment.nStartTime - 1;
+    anchor.nVersion = VERSIONBITS_TOP_BITS | (1 << deployment.bit);
+    VersionBitsCache cache;
+    BOOST_CHECK(cache.State(&anchor, consensus, Consensus::DEPLOYMENT_OP_CAT) == ThresholdState::DEFINED);
+    BOOST_CHECK_EQUAL(cache.ComputeBlockVersion(&anchor, consensus) & (1 << deployment.bit), 0);
+
+    std::vector<CBlockIndex> blocks(4 * period);
+    const ThresholdState expected[] = {ThresholdState::STARTED, ThresholdState::LOCKED_IN,
+                                       ThresholdState::LOCKED_IN, ThresholdState::ACTIVE};
+    for (int i = 0; i < 4 * period; ++i) {
+        auto& block = blocks[i];
+        block.pprev = i == 0 ? &anchor : &blocks[i - 1];
+        block.nHeight = anchor.nHeight + i + 1;
+        block.nTime = deployment.nStartTime + (i + 1) * 60;
+        block.nVersion = VERSIONBITS_TOP_BITS | (1 << deployment.bit);
+        if ((i + 1) % period == 0) {
+            BOOST_CHECK(cache.State(&block, consensus, Consensus::DEPLOYMENT_OP_CAT) == expected[i / period]);
+        }
+    }
+    BOOST_CHECK_EQUAL(blocks.back().nHeight + 1, deployment.min_activation_height);
+    BOOST_CHECK_EQUAL(cache.ComputeBlockVersion(&blocks.back(), consensus) & (1 << deployment.bit), 0);
+    BOOST_CHECK_EQUAL(deployment.bit, 2);
+    BOOST_CHECK(consensus.enforce_opcat_header_format);
+    for (const auto network : {ChainType::TESTNET, ChainType::SIGNET, ChainType::REGTEST}) {
+        const auto test_params = CreateChainParams(*m_node.args, network);
+        BOOST_CHECK(!test_params->GetConsensus().enforce_opcat_header_format);
+    }
+}
 
 // static void TestBlockSubsidyHalvings(const Consensus::Params& consensusParams)
 // {

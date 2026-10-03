@@ -1,9 +1,16 @@
-Bells Core version 3.1.0 is now available from:
+Bells Core 3.1.1rc2 (release candidate 2)
+======================================
+
+Release downloads:
 
   <https://github.com/Nintondo/bellscoinV3/releases>
 
-This release includes new features, various bug fixes and performance
-improvements.
+This candidate fixes premature header-version rejection and NOP5 signature-operation
+counting before opcode activation. The `opcat` deployment retains bit 2, with a
+start median time of October 1, 2026, timeout of April 1, 2027, and minimum activation
+height 1,300,320. Activation still requires 9,576 signals in a 10,080-block period
+and the lock-in delay. After activation, mainnet headers must carry the versionbits
+format marker; continued signaling is not required.
 
 Please report bugs using the issue tracker at GitHub:
 
@@ -24,7 +31,7 @@ wallet versions of Bells Core are generally supported.
 
 Running Bells Core binaries on macOS requires self signing.
 ```
-cd /path/to/bells-3.1.0/bin
+cd /path/to/bells-3.1.1rc2/bin
 xattr -d com.apple.quarantine bells-cli bells-qt bells-tx bells-util bells-wallet bellsd test_bells
 codesign -s - bells-cli bells-qt bells-tx bells-util bells-wallet bellsd test_bells
 ```
@@ -358,4 +365,3 @@ Thanks to everyone who directly contributed to this release:
 - Vasil Dimov
 - virtu
 - willcl-ark
-
