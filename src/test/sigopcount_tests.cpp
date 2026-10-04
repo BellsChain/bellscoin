@@ -7,6 +7,7 @@
 #include <consensus/consensus.h>
 #include <consensus/tx_verify.h>
 #include <key.h>
+#include <policy/policy.h>
 #include <pubkey.h>
 #include <script/interpreter.h>
 #include <script/script.h>
@@ -225,6 +226,39 @@ BOOST_AUTO_TEST_CASE(GetTxSigOpCost)
         BuildTxs(spendingTx, coins, creationTx, scriptPubKey, scriptSig, scriptWitness);
         assert(GetTransactionSigOpCost(CTransaction(spendingTx), coins, flags) == 2);
         assert(VerifyWithFlag(CTransaction(creationTx), spendingTx, flags) == SCRIPT_ERR_CHECKMULTISIGVERIFY);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(p2sh_csfs_standardness_limit)
+{
+    // Standardness counts CSFSVERIFY even before deployment. Consensus costs
+    // still follow the activation flags. Use unexecuted opcodes so both
+    // sides of the policy boundary remain valid scripts under either rule set.
+    struct Counts { unsigned int csfs; unsigned int checksig; };
+    for (const auto counts : {Counts{15, 0}, Counts{16, 0}, Counts{1, 14},
+                              Counts{2, 14}, Counts{0, 15}, Counts{0, 16}}) {
+        BOOST_TEST_CONTEXT("CSFSVERIFY=" << counts.csfs << " CHECKSIG=" << counts.checksig) {
+            CScript redeem = CScript() << OP_0 << OP_IF;
+            for (unsigned int i = 0; i < counts.csfs; ++i) redeem << OP_CHECKSIGFROMSTACKVERIFY;
+            for (unsigned int i = 0; i < counts.checksig; ++i) redeem << OP_CHECKSIG;
+            redeem << OP_ENDIF << OP_TRUE;
+
+            CCoinsView dummy;
+            CCoinsViewCache coins(&dummy);
+            CMutableTransaction funding, spending;
+            BuildTxs(spending, coins, funding, GetScriptForDestination(ScriptHash(redeem)),
+                     CScript() << ToByteVector(redeem), CScriptWitness());
+            const CTransaction tx{spending};
+            const auto total = counts.csfs + counts.checksig;
+            BOOST_CHECK_EQUAL(AreInputsStandard(tx, coins), total <= MAX_P2SH_SIGOPS);
+
+            const uint32_t before = SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS;
+            const uint32_t after = before | SCRIPT_VERIFY_CHECKSIGFROMSTACK;
+            BOOST_CHECK_EQUAL(GetTransactionSigOpCost(tx, coins, before), counts.checksig * WITNESS_SCALE_FACTOR);
+            BOOST_CHECK_EQUAL(GetTransactionSigOpCost(tx, coins, after), total * WITNESS_SCALE_FACTOR);
+            BOOST_CHECK_EQUAL(VerifyWithFlag(CTransaction(funding), spending, before), SCRIPT_ERR_OK);
+            BOOST_CHECK_EQUAL(VerifyWithFlag(CTransaction(funding), spending, after), SCRIPT_ERR_OK);
+        }
     }
 }
 

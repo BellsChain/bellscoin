@@ -194,7 +194,8 @@ bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
             if (stack.empty())
                 return false;
             CScript subscript(stack.back().begin(), stack.back().end());
-            if (subscript.GetSigOpCount(true) > MAX_P2SH_SIGOPS) {
+            // Policy counts CSFSVERIFY consistently with STANDARD_SCRIPT_VERIFY_FLAGS.
+            if (subscript.GetSigOpCount(true, /*count_csfs=*/true) > MAX_P2SH_SIGOPS) {
                 return false;
             }
         } else if (whichType == TxoutType::TX_BARE_DEFAULT_CHECK_TEMPLATE_VERIFY_HASH) {
