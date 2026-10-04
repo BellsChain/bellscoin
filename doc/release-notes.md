@@ -9,8 +9,10 @@ This candidate fixes premature header-version rejection and NOP5 signature-opera
 counting before opcode activation. The `opcat` deployment retains bit 2, with a
 start median time of October 1, 2026, timeout of April 1, 2027, and minimum activation
 height 1,300,320. Activation still requires 9,576 signals in a 10,080-block period
-and the lock-in delay. After activation, mainnet headers must carry the versionbits
-format marker; continued signaling is not required.
+and the lock-in delay. Existing valid header formats, including `0x00100100`
+AuxPoW headers, remain valid after activation. Headers without the versionbits
+marker do not count as signals. Activated opcode rules apply to every block,
+regardless of its header version; continued signaling is not required.
 
 Please report bugs using the issue tracker at GitHub:
 

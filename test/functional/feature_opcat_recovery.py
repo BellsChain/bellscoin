@@ -5,7 +5,8 @@
 """Test legacy compatibility, failed-block recovery, and coordinated activation."""
 
 from test_framework.blocktools import create_block, create_coinbase
-from test_framework.script import CScript, OP_CHECKSIG, OP_NOP5, OP_RETURN
+from test_framework.messages import COutPoint, CTransaction, CTxIn, CTxOut
+from test_framework.script import CScript, OP_CHECKSIG, OP_CHECKTEMPLATEVERIFY, OP_DROP, OP_NOP5, OP_RETURN, OP_TRUE
 from test_framework.test_framework import BellscoinTestFramework
 from test_framework.util import assert_equal
 
@@ -30,7 +31,7 @@ class OpcodeRecoveryTest(BellscoinTestFramework):
     def mine(self, node, count):
         return self.generatetoaddress(node, count, node.get_deterministic_priv_key().address, sync_fun=self.no_op)
 
-    def block(self, node, *, version=0x20000000, extra_script=None, use_auxpow=False):
+    def block(self, node, *, version=0x20000000, extra_script=None, use_auxpow=False, txs=None):
         tip = node.getbestblockhash()
         return create_block(
             int(tip, 16),
@@ -38,6 +39,7 @@ class OpcodeRecoveryTest(BellscoinTestFramework):
             node.getblockheader(tip)["time"] + 1,
             version=version,
             use_auxpow=use_auxpow,
+            txlist=txs,
         )
 
     def run_test(self):
@@ -123,7 +125,19 @@ class OpcodeRecoveryTest(BellscoinTestFramework):
             assert flag in active.getdeploymentinfo()["script_flags"]
 
         self.log.info("BIP9 requires signaling, lock-in, and the minimum-height boundary")
-        self.mine(scheduled, 142)
+        # A mismatched CTV template is a NOP before activation and must fail
+        # afterwards, even in a block without the versionbits header marker.
+        ctv_script = CScript([bytes(32), OP_CHECKTEMPLATEVERIFY, OP_DROP, OP_TRUE])
+        ctv_spends = []
+        for _ in range(2):
+            funding = self.block(scheduled, extra_script=ctv_script)
+            assert_equal(scheduled.submitblock(funding.serialize().hex()), None)
+            spend = CTransaction()
+            spend.vin = [CTxIn(COutPoint(funding.vtx[0].sha256, 1))]
+            spend.vout = [CTxOut(0, CScript([OP_TRUE]))]
+            spend.rehash()
+            ctv_spends.append(spend)
+        self.mine(scheduled, 140)
         old_version = self.block(scheduled, version=3, extra_script=large_nop5)
         assert_equal(scheduled.submitblock(old_version.serialize().hex()), None)
         assert_equal(scheduled.getblockcount(), 143)
@@ -134,42 +148,52 @@ class OpcodeRecoveryTest(BellscoinTestFramework):
         assert_equal(scheduled.getblockcount(), 431)
         assert_equal(scheduled.getdeploymentinfo()["deployments"]["opcat"]["bip9"]["status_next"], "locked_in")
         self.mine(scheduled, 143)
-        last_old = self.block(scheduled, version=3, extra_script=large_nop5)
+        last_old = self.block(scheduled, version=3, extra_script=large_nop5, txs=[ctv_spends[0]])
         assert_equal(scheduled.submitblock(last_old.serialize().hex()), None)
         assert_equal(scheduled.getblockcount(), 575)
         assert_equal(scheduled.getdeploymentinfo()["deployments"]["opcat"]["bip9"]["status_next"], "active")
 
-        self.log.info("The exact activation block enforces the new sigop and header rules")
-        bad = self.block(scheduled, extra_script=large_nop5)
-        assert_equal(scheduled.submitblock(bad.serialize().hex()), "bad-blk-sigops")
-        bad = self.block(scheduled, version=3)
-        assert_equal(scheduled.submitblock(bad.serialize().hex()), "bad-versionbits-format")
-        bad = self.block(scheduled, version=0x00100100, use_auxpow=True)
-        assert_equal(scheduled.submitblock(bad.serialize().hex()), "bad-versionbits-format")
-        # The format restriction must also reject old-style version 4 and
-        # alternate top markers, even though their numeric versions exceed 4.
-        for version in [4, 0x40000000]:
-            bad = self.block(scheduled, version=version)
-            assert_equal(scheduled.submitblock(bad.serialize().hex()), "bad-versionbits-format")
-        # A main-style header without the deployment vote remains valid.
-        formal = self.block(scheduled, version=0x20100100, use_auxpow=True)
-        assert_equal(scheduled.submitblock(formal.serialize().hex()), None)
+        self.log.info("The exact activation block enforces opcode rules for every header format")
+        header_versions = [(3, False), (4, False), (0x40000000, False),
+                           (0x00100100, True), (0x00100104, True), (0x20100100, True)]
+        for version, auxpow in header_versions:
+            bad = self.block(scheduled, version=version, use_auxpow=auxpow, extra_script=large_nop5)
+            assert_equal(scheduled.submitblock(bad.serialize().hex()), "bad-blk-sigops")
+            bad = self.block(scheduled, version=version, use_auxpow=auxpow, txs=[ctv_spends[1]])
+            assert_equal(scheduled.submitblock(bad.serialize().hex()), "block-validation-failed")
+        base_zero = self.block(scheduled, version=0x00100100, use_auxpow=True)
+        assert_equal(base_zero.nVersion, 0x00100100)
+        assert_equal(scheduled.submitblock(base_zero.serialize().hex()), None)
         assert_equal(scheduled.getblockcount(), 576)
         assert_equal(scheduled.getdeploymentinfo()["deployments"]["opcat"]["bip9"]["status"], "active")
+        for flag in ["OP_CAT", "DEFAULT_CHECK_TEMPLATE_VERIFY_HASH", "INTERNALKEY", "CHECKSIGFROMSTACK"]:
+            assert flag in scheduled.getdeploymentinfo()["script_flags"]
 
         self.log.info("Reorg across activation restores the older rules at the earlier height")
         boundary = scheduled.getbestblockhash()
         scheduled.invalidateblock(boundary)
         scheduled.invalidateblock(last_old.hash)
         assert_equal(scheduled.getblockcount(), 574)
-        alternate = self.block(scheduled, version=3, extra_script=large_nop5)
+        alternate = self.block(scheduled, version=3, extra_script=large_nop5, txs=[ctv_spends[1]])
         alternate.nTime += 1
         alternate.solve()
         assert_equal(scheduled.submitblock(alternate.serialize().hex()), None)
         assert_equal(scheduled.getblockcount(), 575)
-        bad = self.block(scheduled, extra_script=large_nop5)
+        bad = self.block(scheduled, version=0x00100100, use_auxpow=True, extra_script=large_nop5)
         assert_equal(scheduled.submitblock(bad.serialize().hex()), "bad-blk-sigops")
-        self.mine(scheduled, 1)
+
+        self.log.info("All previously valid header formats remain valid after activation and restart")
+        for version, auxpow in header_versions:
+            good = self.block(scheduled, version=version, use_auxpow=auxpow)
+            assert_equal(scheduled.submitblock(good.serialize().hex()), None)
+        active_tip = scheduled.getbestblockhash()
+        self.restart_node(2, extra_args=SCHEDULED)
+        assert_equal(scheduled.getbestblockhash(), active_tip)
+        assert_equal(scheduled.getdeploymentinfo()["deployments"]["opcat"]["bip9"]["status"], "active")
+        bad = self.block(scheduled, version=0x00100100, use_auxpow=True, txs=[ctv_spends[0]])
+        assert_equal(scheduled.submitblock(bad.serialize().hex()), "block-validation-failed")
+        good = self.block(scheduled, version=0x00100100, use_auxpow=True)
+        assert_equal(scheduled.submitblock(good.serialize().hex()), None)
 
         self.log.info("Historical bit-2 votes before the future start cannot lock in activation")
         self.mine(no_support, 287)
@@ -186,9 +210,12 @@ class OpcodeRecoveryTest(BellscoinTestFramework):
         deployment = no_support.getdeploymentinfo()["deployments"]["opcat"]["bip9"]
         assert_equal(deployment["status_next"], "started")
         assert_equal(deployment["statistics"]["count"], 0)
-        ctrl = self.block(no_support, version=0x00100100, use_auxpow=True)
-        assert_equal(no_support.submitblock(ctrl.serialize().hex()), None)
-        self.mine(no_support, 143)
+        # Setting bit 2 without the versionbits marker is still not a vote.
+        for version in [0x00100100, 0x00100104]:
+            ctrl = self.block(no_support, version=version, use_auxpow=True)
+            assert_equal(ctrl.nVersion, version)
+            assert_equal(no_support.submitblock(ctrl.serialize().hex()), None)
+        self.mine(no_support, 142)
         deployment = no_support.getdeploymentinfo()["deployments"]["opcat"]["bip9"]
         assert_equal(deployment["status_next"], "started")
         assert_equal(deployment["statistics"]["count"], 0)

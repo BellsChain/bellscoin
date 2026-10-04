@@ -4338,8 +4338,7 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
               DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_DERSIG),
               DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_CLTV));
 
-    // Preserve main-branch header rules before the coordinated deployment.
-    // These checks must also be applied when the deployment is disabled.
+    // Preserve main-branch header rules regardless of opcode deployment state.
     const int32_t nChainID = block.GetChainId();
     if (nHeight > consensusParams.nAuxpowStartHeight &&
         (!CPureBlockHeader::IsValidBaseVersion(baseVer) ||
@@ -4349,17 +4348,9 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
                              strprintf("rejected nVersion=0x%08x block", block.nVersion));
     }
 
-    // On mainnet, include the explicit header format in the rescheduled opcode
-    // deployment. Preserve existing test networks' historical activation rules.
-    // Before ACTIVE, base-zero AuxPoW headers remain valid. After ACTIVE only
-    // the versionbits marker is required, not the deployment's signaling bit.
-    if (consensusParams.enforce_opcat_header_format &&
-        DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_OP_CAT) &&
-        (block.nVersion & VERSIONBITS_TOP_MASK) != VERSIONBITS_TOP_BITS) {
-        return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER,
-                             "bad-versionbits-format",
-                             strprintf("missing versionbits header marker in nVersion=0x%08x", block.nVersion));
-    }
+    // Versionbits formatting determines signaling, not header validity. Once
+    // OP_CAT is active, GetBlockScriptFlags enforces its rules for every block,
+    // including legacy and base-zero AuxPoW headers.
 
     return true;
 }

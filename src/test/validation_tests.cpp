@@ -60,11 +60,6 @@ BOOST_AUTO_TEST_CASE(mainnet_opcode_recovery_activation_schedule)
     BOOST_CHECK_EQUAL(blocks.back().nHeight + 1, deployment.min_activation_height);
     BOOST_CHECK_EQUAL(cache.ComputeBlockVersion(&blocks.back(), consensus) & (1 << deployment.bit), 0);
     BOOST_CHECK_EQUAL(deployment.bit, 2);
-    BOOST_CHECK(consensus.enforce_opcat_header_format);
-    for (const auto network : {ChainType::TESTNET, ChainType::SIGNET, ChainType::REGTEST}) {
-        const auto test_params = CreateChainParams(*m_node.args, network);
-        BOOST_CHECK(!test_params->GetConsensus().enforce_opcat_header_format);
-    }
 }
 
 // static void TestBlockSubsidyHalvings(const Consensus::Params& consensusParams)
