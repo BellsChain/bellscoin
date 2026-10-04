@@ -397,6 +397,7 @@ BASE_SCRIPTS = [
     'feature_opcat.py',
     'feature_opcat_recovery.py',
     'feature_opcat_reorg.py',
+    'feature_opcat_limits.py',
     'p2p_handshake.py',
     'p2p_handshake.py --v2transport',
     'feature_dirsymlinks.py',
