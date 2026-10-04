@@ -1,290 +1,258 @@
 Bells Core 3.1.1rc2 (release candidate 2)
 ======================================
 
-Release downloads:
+This candidate includes the 3.1 development changes and fixes for header
+compatibility, opcode signature-operation accounting, AuxPoW invalid-block
+caching, and P2SH transaction relay policy described below.
 
-  <https://github.com/Nintondo/bellscoinV3/releases>
+Release downloads: <https://github.com/Nintondo/bellscoinV3/releases>
 
-This candidate fixes premature header-version rejection and NOP5 signature-operation
-counting before opcode activation. The `opcat` deployment retains bit 2, with a
-start median time of October 1, 2026, timeout of April 1, 2027, and minimum activation
-height 1,300,320. Activation still requires 9,576 signals in a 10,080-block period
-and the lock-in delay. Existing valid header formats, including `0x00100100`
-AuxPoW headers, remain valid after activation. Headers without the versionbits
-marker do not count as signals. Activated opcode rules apply to every block,
-regardless of its header version; continued signaling is not required.
+Report bugs: <https://github.com/Nintondo/bellscoinV3/issues>
 
-Please report bugs using the issue tracker at GitHub:
+Consensus and Activation
+=======================
 
-  <https://github.com/Nintondo/bellscoinV3/issues>
-
-
-How to Upgrade
-==============
-
-If you are running an older version, shut it down. Wait until it has completely
-shut down (which might take a few minutes in some cases), then run the
-installer (on Windows) or just copy over `/Applications/Bells-Qt` (on macOS)
-or `bellsd`/`bells-qt` (on Linux).
-
-Upgrading directly from a version of Bells Core that has reached its EOL is
-possible, but it might take some time if the data directory needs to be migrated. Old
-wallet versions of Bells Core are generally supported.
-
-Running Bells Core binaries on macOS requires self signing.
-```
-cd /path/to/bells-3.1.1rc2/bin
-xattr -d com.apple.quarantine bells-cli bells-qt bells-tx bells-util bells-wallet bellsd test_bells
-codesign -s - bells-cli bells-qt bells-tx bells-util bells-wallet bellsd test_bells
-```
-
-Compatibility
-==============
-
-Bells Core is supported and extensively tested on operating systems
-using the Linux Kernel 3.17+, macOS 11.0+, and Windows 7 and newer. Bells
-Core should also work on most other UNIX-like systems but is not as
-frequently tested on them. It is not recommended to use Bells Core on
-unsupported systems.
-
-Windows Data Directory
-----------------------
-
-The default data directory on Windows has been moved from `C:\Users\Username\AppData\Roaming\Bells`
-to `C:\Users\Username\AppData\Local\Bells`. Bells Core will check the existence
-of the old directory first and continue to use that directory for backwards
-compatibility if it is present.
-
-JSON-RPC 2.0 Support
+Header compatibility
 --------------------
 
-The JSON-RPC server now recognizes JSON-RPC 2.0 requests and responds with
-strict adherence to the [specification](https://www.jsonrpc.org/specification).
-See [JSON-RPC-interface.md](https://github.com/Nintondo/bellscoinV3/blob/master/doc/JSON-RPC-interface.md#json-rpc-11-vs-20) for details.
+- Restores the header-version acceptance rules used by Bells 3.0.0. Previously
+  valid versions, including the base-zero AuxPoW header `0x00100100`, remain valid
+  both before and after opcode activation.
+- The versionbits marker determines whether a header signals support. It is not
+  an additional requirement for block validity after activation. Activated script
+  rules apply to every block, regardless of header version or signaling.
+- Header presynchronization accounts for Bells' averaging-window retarget rules
+  after the transition to per-block difficulty adjustment.
 
-JSON-RPC clients may need to be updated to be compatible with the JSON-RPC server.
-Please open an issue on GitHub if any compatibility issues are found.
+Opcode deployment
+-----------------
 
-libbellscoinconsensus Removal
----------------------------
+The existing `opcat` deployment uses the following mainnet settings:
 
-The libbellscoin-consensus library was deprecated in 27.0 and is now completely removed. (#29648)
+| Setting | Value |
+| --- | --- |
+| Signaling bit | 2 |
+| Start median time past | October 1, 2026, 00:00 UTC (`1790812800`) |
+| Timeout median time past | April 1, 2027, 00:00 UTC (`1806537600`) |
+| Signaling threshold | 9,576 of 10,080 blocks (95%) |
+| Minimum activation height | 1,300,320 |
+
+A successful signaling period locks in the deployment. Activation follows a
+lock-in period and cannot occur below the minimum height; that height alone does
+not force activation. Only signaling in eligible STARTED periods counts. Votes
+require both the versionbits marker and bit 2.
+
+At a period boundary, reaching the threshold takes precedence over timeout.
+Timeout ends an unsuccessful signaling attempt; it does not expire rules that
+have already locked in or activated. Continued signaling is not required after
+activation. Testnet, signet and regtest retain their separate deployment settings.
+
+The deployment enables:
+
+| Opcode | Supported script contexts |
+| --- | --- |
+| `OP_CAT` | Tapscript; concatenated elements are limited to 520 bytes |
+| `OP_CHECKTEMPLATEVERIFY` (former `OP_NOP4`) | Legacy, P2SH, witness v0 and tapscript |
+| `OP_INTERNALKEY` | Tapscript |
+| `OP_CHECKSIGFROMSTACK` | Tapscript |
+| `OP_CHECKSIGFROMSTACKVERIFY` (former `OP_NOP5`) | Legacy, P2SH, witness v0 and tapscript |
+
+`OP_CHECKTEMPLATEVERIFY` checks a 32-byte template hash without consuming its
+argument. Other argument lengths retain no-op consensus behavior, subject to the
+existing script limits; an empty input stack fails after activation.
+`OP_CHECKSIGFROMSTACKVERIFY` verifies a signature
+without consuming its three stack arguments, preserving the stack effect of the
+former NOP. CAT and INTERNALKEY remain unavailable in legacy and witness-v0 scripts.
+
+Signature-operation accounting
+------------------------------
+
+- Before activation, former NOP5 operations retain their original consensus cost.
+  This prevents premature `bad-blk-sigops` rejection, including when those opcodes
+  occur in an unexecuted branch or an unspendable output.
+- After activation, CSFSVERIFY is included in legacy, P2SH and witness-v0 sigop
+  accounting. Tapscript enforces its execution validation budget. Coinbase
+  accounting in block templates follows the deployment state.
+- P2SH relay policy explicitly counts CSFSVERIFY toward its 15-sigop limit per
+  redeem script, including in mixed CHECKSIG/CSFSVERIFY scripts. This standardness
+  rule is separate from block consensus and does not wait for activation.
+
+AuxPoW validation
+-----------------
+
+Overweight blocks containing AuxPoW parent-coinbase witness are rejected without
+permanently marking the shared Bells block hash invalid. Parent-coinbase witness
+is not committed by that block hash or by the parent coinbase txid; a rejected
+oversized representation must not prevent later acceptance of a valid representation
+with the same hash, including after restart.
+
+The fix preserves the existing block-weight limit and acceptance of valid
+parent-coinbase witness. It changes failure caching, not the accepted block rules.
+
+Amount and duplicate-transaction checks
+--------------------------------------
+
+The 3.1 code retains `MAX_MONEY = 92,000,000 BEL`, compared with 500,000,000 BEL in
+3.0.0. This is a consensus amount-range bound, not a cap on cumulative coin issuance.
+The Bells-specific BIP30 optimization cutoff remains at height 1,701,897,592;
+the recovery changes clarify its historical basis without changing that rule.
+
+How to Upgrade and Check Recovery
+================================
+
+Shut down the old node and wait for it to exit completely before replacing the
+executables. Start the new version using the intended data directory.
+
+For a node affected by earlier header or block rejection:
+
+1. Check `getblockchaininfo`, `getchaintips`, `getdeploymentinfo` and the rejection
+   messages in `debug.log`. Compare the tip and chainwork with a trusted node.
+2. Headers that were rejected without being indexed can be requested and validated
+   again through normal peer synchronization under the corrected rules.
+3. An indexed block already marked invalid can remain rejected after restart.
+   If the identified block is valid under the corrected rules and was rejected
+   because of one of these fixed problems, use `reconsiderblock "<blockhash>"`
+   on that block and let the node evaluate the available chains again.
+4. Verify that the node follows the valid chain with the most accumulated work
+   and continues advancing. The greatest block height alone is not sufficient.
+
+The upgrade does not automatically clear existing invalid-block flags. Blanket
+reconsideration or a routine reindex is not part of this recovery procedure.
+
+The full version identifies this candidate as `3.1.1rc2`; RPC numeric version is
+`30101`, and the peer subversion is `/Bells:3.1.1/`. Build identifiers may append a
+Git suffix. The peer subversion does not distinguish release candidates.
+
+Storage and Data Directory Compatibility
+=======================================
+
+- On Windows, new default data directories use
+  `C:\Users\Username\AppData\Local\Bells`. An existing legacy directory under
+  `AppData\Roaming\Bells` continues to be used when present.
+- Block-file reads and writes apply the key in `blocks/xor.dat`. New empty blocks
+  directories use a random key by default; `-blocksxor=0` creates a zero key.
+  Existing directories without a key use a zero key. A stored key takes precedence.
+- Legacy 3.0.0 data can contain plain block files alongside an unused nonzero
+  `xor.dat`. The legacy read fallback detects the plain block framing, replaces
+  that key with zeros and retries the read. This is not a general repair for
+  arbitrary or mixed block-file formats.
+- Older software that does not apply XOR cannot read genuinely XOR-obfuscated
+  block files. Keep block files and their matching key together; setting
+  `-blocksxor=0` does not convert an existing nonzero-key dataset.
+- Pruning-related chainstate flushes can preserve the coins cache instead of
+  emptying it unnecessarily.
 
 P2P and Network Changes
------------------------
+=======================
 
-- Previously if Bells Core was listening for P2P connections, either using
-  default settings or via `bind=addr:port` it would always also bind to
-  `127.0.0.1:8334` to listen for Tor connections. It was not possible to switch
-  this off, even if the node didn't use Tor. This has been changed and now
-  `bind=addr:port` results in binding on `addr:port` only. The default behavior
-  of binding to `0.0.0.0:8333` and `127.0.0.1:8334` has not been changed.
-
-  If you are using a `bind=...` configuration without `bind=...=onion` and rely
-  on the previous implied behavior to accept incoming Tor connections at
-  `127.0.0.1:8334`, you need to now make this explicit by using
-  `bind=... bind=127.0.0.1:8334=onion`. (#22729)
-
-- Bellscoin Core will now fail to start up if any of its P2P binds fail, rather
-  than the previous behaviour where it would only abort startup if all P2P
-  binds had failed. (#22729)
-
-- UNIX domain sockets can now be used for proxy connections. Set `-onion` or `-proxy`
-  to the local socket path with the prefix `unix:` (e.g. `-onion=unix:/home/me/torsocket`).
-  (#27375)
-
-- UNIX socket paths are now accepted for `-zmqpubrawblock` and `-zmqpubrawtx` with
-  the format `-zmqpubrawtx=unix:/path/to/file` (#27679)
-
-- Additional "in" and "out" flags have been added to `-whitelist` to control whether
-  permissions apply to inbound connections and/or manual ones (default: inbound only). (#27114)
-
-- Transactions having a feerate that is too low will be opportunistically paired with
-  their child transactions and submitted as a package, thus enabling the node to download
-  1-parent-1-child packages using the existing transaction relay protocol. Combined with
-  other mempool policies, this change allows limited "package relay" when a parent transaction
-  is below the mempool minimum feerate. Topologically Restricted Until Confirmation (TRUC)
-  parents are additionally allowed to be below the minimum relay feerate (i.e., pay 0 fees).
-  Use the `submitpackage` RPC to submit packages directly to the node. Warning: this P2P
-  feature is limited (unlike the `submitpackage` interface, a child with multiple unconfirmed
-  parents is not supported) and not yet reliable under adversarial conditions. (#28970)
+- Version 2 P2P transport support is enabled by default, with compatibility for
+  peers using the earlier transport.
+- Explicit `-bind` addresses no longer automatically add the default Tor listener.
+  Configure an explicit `=onion` bind when a separate Tor listener is required.
+  Mainnet's default P2P port is **19919**; the default Tor target remains
+  `127.0.0.1:8334`, and the default RPC port remains **8332**.
+- Failure to bind an explicitly configured P2P address aborts startup. Failure of
+  the automatic IPv6 wildcard bind alone is not fatal.
+- UNIX-domain socket paths are supported by `-proxy` and `-onion` on supported
+  platforms using `unix:/path/to/socket`. ZMQ publisher options also accept this
+  syntax, translated internally to the ZMQ IPC endpoint format.
+- `-whitelist` supports `in` and `out` directions for inbound and manually
+  established outbound connections.
+- Limited one-parent/one-child package relay can consider a low-fee parent with
+  a fee-paying child. This does not provide general multi-parent package relay.
+  Packages can also be submitted directly through `submitpackage`.
+- Mainnet seeds, checkpoints, minimum chainwork and assume-valid data have been
+  refreshed in the 3.1 development line.
 
 Mempool Policy Changes
-----------------------
+======================
 
-- Transactions with version number set to 3 are now treated as standard on all networks (#29496),
-  subject to opt-in Topologically Restricted Until Confirmation (TRUC) transaction policy as
-  described in [BIP 431](https://github.com/bellscoin/bips/blob/master/bip-0431.mediawiki).  The
-  policy includes limits on spending unconfirmed outputs (#28948), eviction of a previous descendant
-  if a more incentive-compatible one is submitted (#29306), and a maximum transaction size of 10,000vB
-  (#29873). These restrictions simplify the assessment of incentive compatibility of accepting or
-  replacing TRUC transactions, thus ensuring any replacements are more profitable for the node and
-  making fee-bumping more reliable.
+- Version-3 transactions are standard subject to Topologically Restricted Until
+  Confirmation (TRUC) policy: restricted unconfirmed ancestry and descendants,
+  a 10,000-vB transaction limit, and a 1,000-vB limit for a transaction spending
+  an unconfirmed TRUC parent. Eligible sibling replacement is supported.
+- Pay To Anchor (P2A) witness outputs are recognized as standard. Relay support
+  depends on the policies of the other nodes along the relay path.
+- Limited package replacement is supported for eligible two-transaction clusters.
+- Full replace-by-fee policy defaults to enabled (`-mempoolfullrbf=1`). The option
+  is marked deprecated; disabling it does not change block consensus.
+- The default `-datacarriersize` budget is 100,000 bytes. Multiple OP_RETURN
+  outputs are permitted, and their complete scriptPubKey byte lengths count
+  toward one aggregate budget. Other transaction-size and standardness limits
+  still apply. `-datacarriersize=83` restores the smaller byte budget, not the old
+  one-output restriction. `-datacarrier` and `-datacarriersize` are deprecated.
 
-- Pay To Anchor (P2A) is a new standard witness output type for spending,
-  a newly recognised output template. This allows for key-less anchor
-  outputs, with compact spending conditions for additional efficiencies on
-  top of an equivalent `sh(OP_TRUE)` output, in addition to the txid stability
-  of the spending transaction.
-  N.B. propagation of this output spending on the network will be limited
-  until a sufficient number of nodes on the network adopt this upgrade. (#30352)
+These are transaction admission, relay and mining policies, not additional
+block-consensus restrictions. The P2SH CSFSVERIFY policy correction is described
+above.
 
-- Limited package RBF is now enabled, where the proposed conflicting package would result in
-  a connected component, aka cluster, of size 2 in the mempool. All clusters being conflicted
-  against must be of size 2 or lower. (#28984)
+RPC and REST Changes
+====================
 
-- The default value of the `-mempoolfullrbf` configuration option has been changed from 0 to 1,
-  i.e. `mempoolfullrbf=1`. (#30493)
+- JSON-RPC 2.0 requests are supported. See [the RPC interface documentation](JSON-RPC-interface.md).
+- `submitblock` matches validation results using the Bells block hash, correcting
+  the 3.0.0 result-catcher mismatch that could report `inconclusive` for an accepted
+  block. This corrects result reporting, not block validation rules.
+- `getdeploymentinfo` exposes the `opcat` deployment and the applicable script flags.
+- `dumptxoutset` writes snapshot format version 2, and `loadtxoutset` requires that
+  format. Old-format dumps need to be recreated. The mainnet snapshot configuration
+  specifies base height **781,902**; loading requires a snapshot matching the
+  configured base block and UTXO hash.
+- `warnings` in `getblockchaininfo`, `getmininginfo` and `getnetworkinfo` returns
+  an array. `-deprecatedrpc=warnings` selects the legacy single-string form.
+- `sendrawtransaction` reports `Transaction outputs already in utxo set` for the
+  corresponding `-27` error.
+- `estimatesmartfee` defaults to `economical`; `conservative` remains available.
+- `scantxoutset` includes `blockhash` and `confirmations` in its unspent-output results.
+- `submitpackage` accepts `maxfeerate` and `maxburnamount`. Fee-rate help text uses BEL.
+- `/rest/getutxos` rejects malformed transaction IDs and output indices with
+  HTTP 400 instead of silently accepting malformed input.
+- `-alertnotify` handles kernel warnings, including invalid-chain warnings, and
+  may run again for subsequent warning events.
 
-- `-datacarriersize` is increased to 100,000 which effectively uncaps the limit (as the maximum transaction size limit will be hit first). It can be overridden   with -datacarriersize=83 to revert to the limit
-  enforced in previous versions. Both `-datacarrier` and `-datacarriersize` options have been marked as deprecated and are expected to be removed in a future release. (#32406)
+Wallet and GUI Changes
+======================
 
-- Multiple data carrier (OP_RETURN) outputs in a transaction are now permitted for relay and mining. The `-datacarriersize` limit applies to the aggregate size of the scriptPubKeys across all such outputs in a 
-  transaction, not including the scriptPubKey size itself. (#32406)Add comment
+- Wallet RPC results expose `mempoolconflicts`. The wallet tracks these conflicts
+  when determining which inputs remain spent, allowing eligible inputs to be
+  reused without manually abandoning the displaced transaction.
+- `fundrawtransaction`, `walletcreatefundedpsbt` and `send` accept `max_tx_weight`.
+  Its default and maximum are **400,000 weight units**, the standard transaction
+  limit; this is not the 4,000,000-WU block limit.
+- Descriptor wallets support `gethdkeys` and `createwalletdescriptor` for listing
+  HD keys and adding automatically generated descriptors.
+- `sendall` can spend unconfirmed change and account for the fees needed to bump
+  its unconfirmed ancestors.
+- An explicit `bumpfee` fee rate is checked against the original fee and the
+  mempool incremental relay requirements rather than a fixed wallet increment.
+- The GUI migration menu can list legacy wallets that are not currently loaded.
+  The information window displays both current and maximum mempool memory usage.
 
-Updated RPCs
-------------
+Build and Test Changes
+======================
 
-- The `dumptxoutset` RPC now returns the UTXO set dump in a new and
-  improved format. Correspondingly, the `loadtxoutset` RPC now expects
-  this new format in the dumps it tries to load. Dumps with the old
-  format are no longer supported and need to be recreated using the
-  new format to be usable. (#29612)
-
-- AssumeUTXO mainnet parameters have been added for height 840,000.
-  This means the `loadtxoutset` RPC can now be used on mainnet with
-  the matching UTXO set from that height. (#28553)
-
-- The `warnings` field in `getblockchaininfo`, `getmininginfo` and
-  `getnetworkinfo` now returns all the active node warnings as an array
-  of strings, instead of a single warning. The current behaviour
-  can be temporarily restored by running Bellscoin Core with the configuration
-  option `-deprecatedrpc=warnings`. (#29845)
-
-- Previously when using the `sendrawtransaction` RPC and specifying outputs
-  that are already in the UTXO set, an RPC error code of `-27` with the
-  message "Transaction already in block chain" was returned in response.
-  The error message has been changed to "Transaction outputs already in utxo set"
-  to more accurately describe the source of the issue. (#30212)
-
-- The default mode for the `estimatesmartfee` RPC has been updated from `conservative` to `economical`,
-  which is expected to reduce over-estimation for many users, particularly if Replace-by-Fee is an option.
-  For users that require high confidence in their fee estimates at the cost of potentially over-estimating,
-  the `conservative` mode remains available. (#30275)
-
-- RPC `scantxoutset` now returns 2 new fields in the "unspents" JSON array: `blockhash` and `confirmations`.
-  See the scantxoutset help for details. (#30515)
-
-- RPC `submitpackage` now allows 2 new arguments to be passed: `maxfeerate` and `maxburnamount`. See the
-  subtmitpackage help for details. (#28950)
-
-Changes to wallet-related RPCs can be found in the Wallet section below.
-
-Updated REST APIs
------------------
-- Parameter validation for `/rest/getutxos` has been improved by rejecting
-  truncated or overly large txids and malformed outpoint indices via raising
-  an HTTP_BAD_REQUEST "Parse error". These requests were previously handled
-  silently. (#30482, #30444)
-
-Build System
-------------
-
-- GCC 11.1 or later, or Clang 16.0 or later,
-are now required to compile Bellscoin Core. (#29091, #30263)
-
-- The minimum required glibc to run Bells Core is now
-2.31. This means that RHEL 8 and Ubuntu 18.04 (Bionic)
-are no-longer supported. (#29987)
-
-- `--enable-lcov-branch-coverage` has been removed, given
-incompatibilities between lcov version 1 & 2. `LCOV_OPTS`
-should be used to set any options instead. (#30192)
-
-Updated Settings
-----------------
-
-- When running with `-alertnotify`, an alert can now be raised multiple
-times instead of just once. Previously, it was only raised when unknown
-new consensus rules were activated. Its scope has now been increased to
-include all kernel warnings. Specifically, alerts will now also be raised
-when an invalid chain with a large amount of work has been detected.
-Additional warnings may be added in the future. (#30058)
-
-Changes to GUI or wallet related settings can be found in the GUI or Wallet section below.
-
-Wallet
-------
-
-- The wallet now detects when wallet transactions conflict with the mempool. Mempool-conflicting
-  transactions can be seen in the `"mempoolconflicts"` field of `gettransaction`. The inputs
-  of mempool-conflicted transactions can now be respent without manually abandoning the
-  transactions when the parent transaction is dropped from the mempool, which can cause wallet
-  balances to appear higher. (#27307)
-
-- A new `max_tx_weight` option has been added to the RPCs `fundrawtransaction`, `walletcreatefundedpsbt`, and `send`.
-It specifies the maximum transaction weight. If the limit is exceeded during funding, the transaction will not be built.
-The default value is 4,000,000 WU. (#29523)
-
-- A new `createwalletdescriptor` RPC allows users to add new automatically generated
-  descriptors to their wallet. This can be used to upgrade wallets created prior to the
-  introduction of a new standard descriptor, such as taproot. (#29130)
-
-- A new RPC `gethdkeys` lists all of the BIP32 HD keys in use by all of the descriptors in the wallet.
-  These keys can be used in conjunction with `createwalletdescriptor` to create and add single key
-  descriptors to the wallet for a particular key that the wallet already knows. (#29130)
-
-- The `sendall` RPC can now spend unconfirmed change and will include additional fees as necessary
-  for the resulting transaction to bump the unconfirmed transactions' feerates to the specified feerate. (#28979)
-
-- In RPC `bumpfee`, if a `fee_rate` is specified, the feerate is no longer restricted
-  to following the wallet's incremental feerate of 5 sat/vb. The feerate must still be
-  at least the sum of the original fee and the mempool's incremental feerate. (#27969)
-
-GUI Changes
------------
-
-- The "Migrate Wallet" menu allows users to migrate any legacy wallet in their wallet
-directory, regardless of the wallets loaded. (gui#824)
-
-- The "Information" window now displays the maximum mempool size along with the
-mempool usage. (gui#825)
-
-Low-level Changes
-=================
-
-Tests
------
-
-- The BIP94 timewarp attack mitigation is now active on the `regtest` network. (#30681)
-
-- A new `-testdatadir` option has been added to `test_bellscoin` to allow specifying the
-  location of unit test data directories. (#26564)
-
-Blockstorage
-------------
-
-- Block files are now XOR'd by default with a key stored in the blocksdir.
-Previous releases of Bellscoin Core or previous external software will not be able to read the blocksdir with a non-zero XOR-key.
-Refer to the `-blocksxor` help for more details. (#28052)
-
-Chainstate
-----------
-
-- The chainstate database flushes that occur when blocks are pruned will no longer
-empty the database cache. The cache will remain populated longer, which significantly
-reduces the time for initial block download to complete. (#28280)
-
-Dependencies
-------------
-
-- The dependency on Boost.Process has been replaced with cpp-subprocess, which is contained in source.
-Builders will no longer need Boost.Process to build with external signer support. (#28981)
+- The documented compiler minimums are GCC 11.1 or Clang 16.0. The Guix Linux
+  release configuration targets glibc 2.31. See [dependencies](dependencies.md)
+  and the platform build guides for build requirements.
+- External signer process support uses the bundled cpp-subprocess implementation
+  instead of Boost.Process.
+- The separately distributed consensus verification library has been removed;
+  internal consensus code remains part of the node build.
+- Coverage configuration uses `LCOV_OPTS`; `--enable-lcov-branch-coverage` is removed.
+- MSVC version generation preserves the release-candidate suffix.
+- `test_bells` supports `-testdatadir`. Regtest enables the BIP94 timestamp check;
+  this check is disabled on mainnet.
+- Regression coverage includes header recovery, activation boundaries and reorgs,
+  old/new block acceptance, automatic chain convergence, sigop and opcode limits,
+  header-presync retarget histories, AuxPoW same-hash recovery, and the 15/16-sigop
+  P2SH policy boundary. The differential tests accept an optional 3.0.0 reference
+  binary; their default control uses current code with the deployment disabled.
 
 Credits
 =======
 
-Thanks to everyone who directly contributed to this release:
+Thanks to the Bells and upstream Bitcoin Core contributors whose work is included in this release:
+
 - Billy Markus
 - Yar Sawyer
 - Dim Marvel
