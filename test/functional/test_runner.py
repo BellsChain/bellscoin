@@ -191,6 +191,7 @@ BASE_SCRIPTS = [
     'tool_wallet.py --descriptors',
     'auxpow_mining.py',
     'auxpow_invalidpow.py',
+    'auxpow_compatibility.py',
     'auxpow_zerohash.py',
     'wallet_txn_clone.py',
     'wallet_txn_clone.py --segwit',
