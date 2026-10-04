@@ -234,6 +234,9 @@ Build and Test Changes
 - The documented compiler minimums are GCC 11.1 or Clang 16.0. The Guix Linux
   release configuration targets glibc 2.31. See [dependencies](dependencies.md)
   and the platform build guides for build requirements.
+- Guix runs the `osslsigncode` dependency tests at a fixed date to avoid failures
+  caused by expired test certificates. This does not change the system clock or
+  the dates used when signing release files.
 - External signer process support uses the bundled cpp-subprocess implementation
   instead of Boost.Process.
 - The separately distributed consensus verification library has been removed;
